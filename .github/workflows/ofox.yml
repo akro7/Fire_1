@@ -18,11 +18,10 @@ jobs:
     permissions:
       contents: write
     env:
-      DEVICE_CODENAME:      fire
-      DEVICE_PATH:          device/xiaomi/fire
-      MANIFEST_BRANCH:      12.1
-      KERNEL_SOURCE_URL:    https://github.com/mkpromvp/Stock-rom-dumber
-      KERNEL_SOURCE_BRANCH: dump-redmi-fire-os2.0.207.0.vmxmixm
+      DEVICE_CODENAME:   fire
+      DEVICE_PATH:       device/xiaomi/fire
+      MANIFEST_BRANCH:   12.1
+      DUMP_RAW_BASE:     https://github.com/mkpromvp/Stock-rom-dumber/raw/refs/heads/dump-redmi-fire-os2.0.207.0.vmxmixm
 
     steps:
       # ── 1. Checkout device tree ──────────────────────────────────
@@ -67,7 +66,7 @@ jobs:
           chmod +x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # ── 6. Setup build environment (OrangeFox style) ─────────────
+      # ── 6. Setup build environment ───────────────────────────────
       - name: Setup build environment
         run: |
           git clone https://gitlab.com/OrangeFox/misc/scripts /tmp/ofox_scripts
@@ -91,39 +90,28 @@ jobs:
           rm -rf "$DEST"
           cp -r "$GITHUB_WORKSPACE/${{ env.DEVICE_PATH }}" "$DEST"
 
-      # ── 9. Prepare prebuilt kernel ───────────────────────────────
-      - name: Prepare prebuilt kernel
+      # ── 9. Download prebuilt kernel from dump ────────────────────
+      - name: Download prebuilt kernel
         run: |
           PREBUILT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}/prebuilt"
+          mkdir -p "$PREBUILT_DIR"
 
           if [ -f "$PREBUILT_DIR/kernel" ]; then
             echo "Kernel already present — skipping."
-            exit 0
+          else
+            echo "Downloading kernel from stock dump..."
+            curl -fL \
+              "${{ env.DUMP_RAW_BASE }}/boot/kernel" \
+              -o "$PREBUILT_DIR/kernel"
+            echo "Done: $(ls -lh $PREBUILT_DIR/kernel)"
           fi
 
-          echo "Cloning stock dump to extract boot.img kernel..."
-          git clone --depth=1 \
-            --branch ${{ env.KERNEL_SOURCE_BRANCH }} \
-            ${{ env.KERNEL_SOURCE_URL }} /tmp/dump_repo
-
-          BOOT_IMG=$(find /tmp/dump_repo -maxdepth 4 -name "boot.img" | head -1)
-          if [ -z "$BOOT_IMG" ]; then
-            echo "::warning::boot.img not found in dump. Commit prebuilt/kernel manually."
-            exit 0
+          # تأكد إن dtb.img موجود (موجود في repo أصلاً)
+          if [ -f "$PREBUILT_DIR/dtb.img" ]; then
+            echo "dtb.img already present."
+          else
+            echo "::warning::dtb.img not found in prebuilt!"
           fi
-
-          python3 - "$BOOT_IMG" "$PREBUILT_DIR/kernel" << 'PY'
-          import struct, sys, os
-          src, dst = sys.argv[1], sys.argv[2]
-          boot = open(src, "rb").read()
-          assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-          kernel_size = struct.unpack_from("<I", boot, 8)[0]
-          page_size   = 4096
-          kernel_data = boot[page_size : page_size + kernel_size]
-          os.makedirs(os.path.dirname(dst), exist_ok=True)
-          open(dst, "wb").write(kernel_data)
-          print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
-          PY
 
       # ── 10. Apply MSMS / OrangeFox decryption patches ────────────
       - name: Apply MSMS decryption patches
@@ -159,14 +147,14 @@ jobs:
           mka adbd vendorbootimage -j$(nproc) 2>&1 | tee /tmp/build.log
           BUILD_EXIT=${PIPESTATUS[0]}
 
-          # ── جمع الأخطاء في ملف منفصل ─────────────────────────────
+          # جمع الأخطاء في ملف منفصل
           echo "=== BUILD ERRORS & WARNINGS ===" > /tmp/build_errors.log
           echo "Run #${{ github.run_number }} — $(date)" >> /tmp/build_errors.log
           echo "========================================" >> /tmp/build_errors.log
           grep -iE "^(.*error:|.*warning:|make:|FAILED:|ninja:|fatal:)" /tmp/build.log \
             >> /tmp/build_errors.log || true
           echo "" >> /tmp/build_errors.log
-          echo "=== LAST 100 LINES OF BUILD LOG ===" >> /tmp/build_errors.log
+          echo "=== LAST 100 LINES ===" >> /tmp/build_errors.log
           tail -100 /tmp/build.log >> /tmp/build_errors.log
 
           exit $BUILD_EXIT
@@ -177,17 +165,14 @@ jobs:
           OUT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/out/target/product/${{ env.DEVICE_CODENAME }}"
           TIMESTAMP=$(date +'%Y%m%d-%H%M')
           OUTFILE="OrangeFox-${{ env.MANIFEST_BRANCH }}-${{ env.DEVICE_CODENAME }}-AKRO-${TIMESTAMP}.img"
-
-          # vendor_boot.img هو الـ target الأساسي لهذا الجهاز
           cp "$OUT_DIR/vendor_boot.img" "$GITHUB_WORKSPACE/$OUTFILE" || true
           cp "$OUT_DIR/OrangeFox"*.zip "$GITHUB_WORKSPACE/" 2>/dev/null || true
-
           echo "RECOVERY_IMG=$GITHUB_WORKSPACE/$OUTFILE" >> $GITHUB_ENV
           echo "OUT_DIR=$OUT_DIR"                        >> $GITHUB_ENV
           echo "OUTFILE=$OUTFILE"                        >> $GITHUB_ENV
 
       # ── 14. Upload artifacts ─────────────────────────────────────
-      - name: Upload vendor_boot image
+      - name: Upload recovery image
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.OUTFILE }}
@@ -197,7 +182,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # ── رفع ملف الأخطاء دايمًا (سواء نجح أو فشل البيلد) ─────────
+      # رفع ملف الأخطاء دايمًا
       - name: Upload build errors log
         if: always()
         uses: actions/upload-artifact@v4
@@ -235,7 +220,7 @@ jobs:
           tag_name: AKRO-${{ github.run_number }}
           name: "OrangeFox fire AKRO Build #${{ github.run_number }}"
           body: |
-            **Device:** Redmi fire (MT6768)
+            **Device:** Redmi 12 (fire) — MT6768
             **ROM Base:** HyperOS 2.0.207.0.VMXMIXM (Android 15)
             **OrangeFox branch:** ${{ env.MANIFEST_BRANCH }}
             **Maintainer:** AKRO — UNOFFICIAL
@@ -244,7 +229,8 @@ jobs:
             ```
             fastboot flash vendor_boot OrangeFox-*.img
             ```
-            - A/B device — الريكفري جوه vendor_boot — FBE decryption لـ HyperOS 2 / Android 15
+            - A/B device — الريكفري جوه vendor_boot
+            - FBE decryption لـ HyperOS 2 / Android 15
           files: |
             ${{ env.RECOVERY_IMG }}
             ${{ env.OUT_DIR }}/OrangeFox*.zip
