@@ -156,7 +156,20 @@ jobs:
           source build/envsetup.sh
           set -e
           lunch twrp_${{ env.DEVICE_CODENAME }}-eng
-          mka adbd recoveryimage -j$(nproc) 2>&1 | tee /tmp/build.log
+          mka adbd vendorbootimage -j$(nproc) 2>&1 | tee /tmp/build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+
+          # ── جمع الأخطاء في ملف منفصل ─────────────────────────────
+          echo "=== BUILD ERRORS & WARNINGS ===" > /tmp/build_errors.log
+          echo "Run #${{ github.run_number }} — $(date)" >> /tmp/build_errors.log
+          echo "========================================" >> /tmp/build_errors.log
+          grep -iE "^(.*error:|.*warning:|make:|FAILED:|ninja:|fatal:)" /tmp/build.log \
+            >> /tmp/build_errors.log || true
+          echo "" >> /tmp/build_errors.log
+          echo "=== LAST 100 LINES OF BUILD LOG ===" >> /tmp/build_errors.log
+          tail -100 /tmp/build.log >> /tmp/build_errors.log
+
+          exit $BUILD_EXIT
 
       # ── 13. Rename output ────────────────────────────────────────
       - name: Rename output image
@@ -164,8 +177,11 @@ jobs:
           OUT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/out/target/product/${{ env.DEVICE_CODENAME }}"
           TIMESTAMP=$(date +'%Y%m%d-%H%M')
           OUTFILE="OrangeFox-${{ env.MANIFEST_BRANCH }}-${{ env.DEVICE_CODENAME }}-AKRO-${TIMESTAMP}.img"
-          cp "$OUT_DIR/recovery.img" "$GITHUB_WORKSPACE/$OUTFILE" || true
+
+          # vendor_boot.img هو الـ target الأساسي لهذا الجهاز
+          cp "$OUT_DIR/vendor_boot.img" "$GITHUB_WORKSPACE/$OUTFILE" || true
           cp "$OUT_DIR/OrangeFox"*.zip "$GITHUB_WORKSPACE/" 2>/dev/null || true
+
           echo "RECOVERY_IMG=$GITHUB_WORKSPACE/$OUTFILE" >> $GITHUB_ENV
           echo "OUT_DIR=$OUT_DIR"                        >> $GITHUB_ENV
           echo "OUTFILE=$OUTFILE"                        >> $GITHUB_ENV
@@ -181,11 +197,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # ── رفع ملف الأخطاء دايمًا (سواء نجح أو فشل البيلد) ─────────
+      - name: Upload build errors log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-errors-fire-${{ github.run_number }}
+          path: /tmp/build_errors.log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Collect all logs on failure
         if: failure()
         run: |
           mkdir -p /tmp/fail_logs
-          [ -f /tmp/build.log ] && cp /tmp/build.log /tmp/fail_logs/ || true
+          [ -f /tmp/build.log ]        && cp /tmp/build.log        /tmp/fail_logs/ || true
+          [ -f /tmp/build_errors.log ] && cp /tmp/build_errors.log /tmp/fail_logs/ || true
           find $GITHUB_WORKSPACE/OrangeFox_src/out -name "*.log" 2>/dev/null \
             | head -20 \
             | xargs -I{} sh -c 'cp "{}" /tmp/fail_logs/$(basename "{}")' || true
@@ -215,9 +242,9 @@ jobs:
 
             ### Flash
             ```
-            fastboot flash boot OrangeFox-*.img
+            fastboot flash vendor_boot OrangeFox-*.img
             ```
-            - A/B device — FBE decryption for HyperOS 2 / Android 15
+            - A/B device — الريكفري جوه vendor_boot — FBE decryption لـ HyperOS 2 / Android 15
           files: |
             ${{ env.RECOVERY_IMG }}
             ${{ env.OUT_DIR }}/OrangeFox*.zip
