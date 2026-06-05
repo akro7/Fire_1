@@ -106,7 +106,6 @@ jobs:
             echo "Done: $(ls -lh $PREBUILT_DIR/kernel)"
           fi
 
-          # تأكد إن dtb.img موجود (موجود في repo أصلاً)
           if [ -f "$PREBUILT_DIR/dtb.img" ]; then
             echo "dtb.img already present."
           else
@@ -130,6 +129,7 @@ jobs:
         with:
           max-size: 2G
           key: ofox-fire-${{ env.MANIFEST_BRANCH }}
+          dir: /tmp/ccache
 
       # ── 12. Build ────────────────────────────────────────────────
       - name: Build OrangeFox
@@ -137,6 +137,7 @@ jobs:
         run: |
           export USE_CCACHE=1
           export CCACHE_EXEC=$(which ccache)
+          export CCACHE_DIR=/tmp/ccache
           export ALLOW_MISSING_DEPENDENCIES=true
           export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
           export BUILD_BROKEN_VENDOR_PROPERTY_NAMESPACE=true
@@ -147,7 +148,6 @@ jobs:
           mka adbd vendorbootimage -j$(nproc) 2>&1 | tee /tmp/build.log
           BUILD_EXIT=${PIPESTATUS[0]}
 
-          # جمع الأخطاء في ملف منفصل
           echo "=== BUILD ERRORS & WARNINGS ===" > /tmp/build_errors.log
           echo "Run #${{ github.run_number }} — $(date)" >> /tmp/build_errors.log
           echo "========================================" >> /tmp/build_errors.log
@@ -182,7 +182,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # رفع ملف الأخطاء دايمًا
       - name: Upload build errors log
         if: always()
         uses: actions/upload-artifact@v4
