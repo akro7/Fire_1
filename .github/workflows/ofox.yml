@@ -1,4 +1,4 @@
-name: Build OrangeFox Recovery - Redmi fire (MT6768)
+Name: Build OrangeFox Recovery - Redmi fire (MT6768)
 
 on:
   push:
@@ -35,7 +35,14 @@ jobs:
           sudo apt-get clean
           df -h
 
-      # ── 3. Install dependencies ──────────────────────────────────
+      # ── 3. Setup Java 11 (Strict Version Control) ────────────────
+      - name: Setup Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      # ── 4. Install dependencies ──────────────────────────────────
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -47,14 +54,14 @@ jobs:
             xsltproc unzip fontconfig python3 python3-pip bc \
             lzop pngcrush rsync schedtool ccache openjdk-11-jdk aria2
 
-      # ── 4. Configure git ─────────────────────────────────────────
+      # ── 5. Configure git ─────────────────────────────────────────
       - name: Configure git
         run: |
           git config --global user.name  "AKRO-Build"
           git config --global user.email "build@localhost"
           git config --global color.ui   false
 
-      # ── 5. Install repo ──────────────────────────────────────────
+      # ── 6. Install repo ──────────────────────────────────────────
       - name: Install repo
         run: |
           mkdir -p ~/bin
@@ -63,14 +70,14 @@ jobs:
           chmod +x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # ── 6. Setup build environment ───────────────────────────────
+      # ── 7. Setup build environment ───────────────────────────────
       - name: Setup build environment
         run: |
           git clone https://gitlab.com/OrangeFox/misc/scripts /tmp/ofox_scripts
           cd /tmp/ofox_scripts
           sudo bash setup/android_build_env.sh
 
-      # ── 7. Init & Sync OrangeFox manifest ────────────────────────
+      # ── 8. Init & Sync OrangeFox manifest ────────────────────────
       - name: Init and Sync OrangeFox manifest
         run: |
           mkdir -p $GITHUB_WORKSPACE/OrangeFox_src
@@ -80,14 +87,14 @@ jobs:
             --branch ${{ env.MANIFEST_BRANCH }} \
             --path $GITHUB_WORKSPACE/OrangeFox_src
 
-      # ── 8. Place device tree ─────────────────────────────────────
+      # ── 9. Place device tree ─────────────────────────────────────
       - name: Place device tree
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
           rm -rf "$DEST"
           cp -r "$GITHUB_WORKSPACE/${{ env.DEVICE_PATH }}" "$DEST"
 
-      # ── 8.1 Fix obsolete variable names ──────────────────────────
+      # ── 9.1 Fix obsolete variable names ──────────────────────────
       - name: Fix obsolete OF_TARGET_DEVICES variable
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
@@ -99,7 +106,7 @@ jobs:
               echo "  Fixed: $f"
             done
 
-      # ── 8.2 Patch BoardConfig for vendor_boot ────────────────────
+      # ── 9.2 Patch BoardConfig for vendor_boot ────────────────────
       - name: Patch BoardConfig for vendor_boot (no recovery partition)
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
@@ -121,7 +128,7 @@ jobs:
           echo "=== BoardConfig.mk patched ==="
           grep -E "RECOVERY|VENDOR_BOOT" "$BOARD_CFG"
 
-      # ── 8.3 Patch device.mk for virtual A/B + vendor_boot ────────
+      # ── 9.3 Patch device.mk for virtual A/B + vendor_boot ────────
       - name: Patch device.mk for virtual AB and vendor_boot
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
@@ -138,7 +145,7 @@ jobs:
           fi
           echo "=== device.mk patched ==="
 
-      # ── 9. Prepare prebuilt kernel ───────────────────────────────
+      # ── 10. Prepare prebuilt kernel ───────────────────────────────
       - name: Prepare prebuilt kernel
         run: |
           PREBUILT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}/prebuilt"
@@ -200,7 +207,7 @@ jobs:
             echo "vendor_boot.img copied to prebuilt."
           fi
 
-      # ── 10. Apply MSMS decryption patches ────────────────────────
+      # ── 11. Apply MSMS decryption patches ────────────────────────
       - name: Apply MSMS decryption patches
         working-directory: OrangeFox_src
         run: |
@@ -209,29 +216,35 @@ jobs:
           git fetch ofox-upstream fox_${{ env.MANIFEST_BRANCH }} --depth=1
           echo "OrangeFox Recovery upstream fetched."
 
-      # ── 11. ccache ───────────────────────────────────────────────
+      # ── 12. ccache ───────────────────────────────────────────────
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           max-size: 2G
           key: ofox-fire-${{ env.MANIFEST_BRANCH }}
 
-      # ── 12. Build vendor_boot ────────────────────────────────────
+      # ── 13. Build vendor_boot ────────────────────────────────────
       - name: Build OrangeFox (vendor_boot)
         working-directory: OrangeFox_src
         run: |
+          # العزل الصارم للـ NDK الخارجي لمنع التداخل مع الأدوات المدمجة بالسورس
+          unset ANDROID_NDK_HOME
+          unset ANDROID_NDK_ROOT
+          unset ANDROID_NDK_LATEST_HOME
+          
           export USE_CCACHE=1
           export CCACHE_EXEC=$(which ccache)
           export ALLOW_MISSING_DEPENDENCIES=true
           export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
           export BUILD_BROKEN_VENDOR_PROPERTY_NAMESPACE=true
+          
           set +e
           source build/envsetup.sh
           set -e
           lunch twrp_${{ env.DEVICE_CODENAME }}-eng
           mka adbd vendorbootimage -j$(nproc) 2>&1 | tee /tmp/build.log
 
-      # ── 13. Rename output ────────────────────────────────────────
+      # ── 14. Rename output ────────────────────────────────────────
       - name: Rename output image
         run: |
           OUT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/out/target/product/${{ env.DEVICE_CODENAME }}"
@@ -251,7 +264,7 @@ jobs:
           echo "OUT_DIR=$OUT_DIR"   >> $GITHUB_ENV
           echo "OUTFILE=$OUTFILE"   >> $GITHUB_ENV
 
-      # ── 14. Upload artifacts ─────────────────────────────────────
+      # ── 15. Upload artifacts ─────────────────────────────────────
       - name: Upload vendor_boot image
         uses: actions/upload-artifact@v4
         with:
@@ -348,7 +361,7 @@ jobs:
           path: /tmp/fail_logs/
           retention-days: 7
 
-      # ── 15. GitHub Release (tag only) ────────────────────────────
+      # ── 16. GitHub Release (tag only) ────────────────────────────
       - name: Create GitHub Release
         if: success() && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
