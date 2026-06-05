@@ -47,7 +47,7 @@ jobs:
             libncurses5 lib32ncurses5-dev x11proto-core-dev \
             libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
             xsltproc unzip fontconfig python3 python3-pip bc \
-            lzop pngcrush rsync schedtool ccache openjdk-11-jdk
+            lzop pngcrush rsync schedtool ccache openjdk-11-jdk aria2
 
       # ── 4. Configure git ─────────────────────────────────────────
       - name: Configure git
@@ -65,27 +65,22 @@ jobs:
           chmod +x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # ── 6. Init OrangeFox manifest (repo init مباشرة) ───────────
-      - name: Init OrangeFox manifest
+      # ── 6. Setup build environment (OrangeFox style) ─────────────
+      - name: Setup build environment
+        run: |
+          git clone https://gitlab.com/OrangeFox/misc/scripts /tmp/ofox_scripts
+          cd /tmp/ofox_scripts
+          sudo bash setup/android_build_env.sh
+
+      # ── 7. Init & Sync OrangeFox manifest ────────────────────────
+      - name: Init and Sync OrangeFox manifest
         run: |
           mkdir -p $GITHUB_WORKSPACE/OrangeFox_src
-          cd $GITHUB_WORKSPACE/OrangeFox_src
-          repo init \
-            --depth=1 \
-            -u https://gitlab.com/OrangeFox/sync.git \
-            -b ${{ env.MANIFEST_BRANCH }}
-
-      # ── 7. Sync sources ──────────────────────────────────────────
-      - name: Sync OrangeFox sources
-        working-directory: OrangeFox_src
-        run: |
-          repo sync -j$(nproc) \
-            --force-sync \
-            --no-clone-bundle \
-            --no-tags \
-            --optimized-fetch \
-            --prune \
-            --depth=1
+          git clone https://gitlab.com/OrangeFox/sync.git /tmp/ofox_sync
+          cd /tmp/ofox_sync
+          ./orangefox_sync.sh \
+            --branch ${{ env.MANIFEST_BRANCH }} \
+            --path $GITHUB_WORKSPACE/OrangeFox_src
 
       # ── 8. Place device tree ─────────────────────────────────────
       - name: Place device tree
@@ -120,7 +115,6 @@ jobs:
           src, dst = sys.argv[1], sys.argv[2]
           boot = open(src, "rb").read()
           assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-          # boot header v3: kernel_size at offset 8
           kernel_size = struct.unpack_from("<I", boot, 8)[0]
           page_size   = 4096
           kernel_data = boot[page_size : page_size + kernel_size]
@@ -154,7 +148,9 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_EXEC=$(which ccache)
           export ALLOW_MISSING_DEPENDENCIES=true
+          set +e
           source build/envsetup.sh
+          set -e
           lunch twrp_${{ env.DEVICE_CODENAME }}-eng
           mka adbd recoveryimage -j$(nproc) 2>&1 | tee /tmp/build.log
 
