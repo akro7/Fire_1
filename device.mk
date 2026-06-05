@@ -6,6 +6,7 @@
 #
 
 LOCAL_PATH := device/xiaomi/fire
+
 # A/B
 AB_OTA_POSTINSTALL_CONFIG += \
     RUN_POSTINSTALL_system=true \
@@ -16,16 +17,15 @@ AB_OTA_POSTINSTALL_CONFIG += \
 # Boot control HAL
 PRODUCT_PACKAGES += \
     android.hardware.boot@1.0-impl \
+    android.hardware.boot@1.0-impl.recovery \
     android.hardware.boot@1.0-service
 
 PRODUCT_PACKAGES += \
-    bootctrl.mt6768
-
-PRODUCT_STATIC_BOOT_CONTROL_HAL := \
     bootctrl.mt6768 \
-    libgptutils \
-    libz \
-    libcutils
+    bootctrl.mt6768.recovery
+
+# PRODUCT_STATIC_BOOT_CONTROL_HAL is obsolete since Android 11
+# Use shared library modules above instead
 
 PRODUCT_PACKAGES += \
     otapreopt_script \
