@@ -153,58 +153,53 @@ jobs:
             echo "Kernel already present — skipping."
             exit 0
           fi
-          echo "Cloning stock dump to extract kernel from vendor_boot.img..."
+          echo "Cloning stock dump to extract kernel..."
           git clone --depth=1 --branch ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE_URL }} /tmp/dump_repo
           VENDOR_BOOT=$(find /tmp/dump_repo -maxdepth 4 -name "vendor_boot.img" | head -1)
           BOOT_IMG=$(find /tmp/dump_repo -maxdepth 4 -name "boot.img" | head -1)
           mkdir -p "$PREBUILT_DIR"
+          
           if [ -n "$VENDOR_BOOT" ]; then
-            echo "Found vendor_boot.img — extracting kernel..."
+            echo "Found vendor_boot.img — verification stage..."
             python3 - "$VENDOR_BOOT" "$PREBUILT_DIR/kernel" << 'PY'
-          import struct, sys, os
-          src, dst = sys.argv[1], sys.argv[2]
-          data = open(src, "rb").read()
-          VENDOR_BOOT_MAGIC = b"VNDRBOOT"
-          assert data[:8] == VENDOR_BOOT_MAGIC, f"Not a vendor_boot image! Magic: {data[:8]}"
-          header_version = struct.unpack_from("<I", data, 8)[0]
-          print(f"vendor_boot v{header_version} — kernel is in boot.img, not vendor_boot.")
-          open(dst + ".vendor_boot_only", "wb").write(b"")
-          PY
-            if [ -n "$BOOT_IMG" ] && [ ! -f "$PREBUILT_DIR/kernel" ]; then
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+assert data[:8] == b"VNDRBOOT", "Not a vendor_boot image!"
+header_version = struct.unpack_from("<I", data, 8)[0]
+print(f"vendor_boot v{header_version} verified.")
+PY
+            if [ -n "$BOOT_IMG" ]; then
               echo "Extracting kernel from boot.img..."
               python3 - "$BOOT_IMG" "$PREBUILT_DIR/kernel" << 'PY'
-            import struct, sys, os
-            src, dst = sys.argv[1], sys.argv[2]
-            boot = open(src, "rb").read()
-            assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-            kernel_size = struct.unpack_from("<I", boot, 8)[0]
-            page_size   = struct.unpack_from("<I", boot, 12)[0]
-            kernel_data = boot[page_size : page_size + kernel_size]
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            open(dst, "wb").write(kernel_data)
-            print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
-            PY
+import struct, sys, os
+boot = open(sys.argv[1], "rb").read()
+assert boot[:8] == b"ANDROID!", "Not an Android boot image"
+kernel_size = struct.unpack_from("<I", boot, 8)[0]
+page_size   = struct.unpack_from("<I", boot, 12)[0]
+kernel_data = boot[page_size : page_size + kernel_size]
+open(sys.argv[2], "wb").write(kernel_data)
+print(f"Kernel extracted successfully: {kernel_size} bytes")
+PY
             fi
           elif [ -n "$BOOT_IMG" ]; then
-            echo "No vendor_boot.img found, extracting kernel from boot.img..."
+            echo "No vendor_boot.img found, extracting kernel from boot.img directly..."
             python3 - "$BOOT_IMG" "$PREBUILT_DIR/kernel" << 'PY'
-          import struct, sys, os
-          src, dst = sys.argv[1], sys.argv[2]
-          boot = open(src, "rb").read()
-          assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-          kernel_size = struct.unpack_from("<I", boot, 8)[0]
-          page_size   = struct.unpack_from("<I", boot, 12)[0]
-          kernel_data = boot[page_size : page_size + kernel_size]
-          os.makedirs(os.path.dirname(dst), exist_ok=True)
-          open(dst, "wb").write(kernel_data)
-          print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
-          PY
+import struct, sys
+boot = open(sys.argv[1], "rb").read()
+assert boot[:8] == b"ANDROID!", "Not an Android boot image"
+kernel_size = struct.unpack_from("<I", boot, 8)[0]
+page_size   = struct.unpack_from("<I", boot, 12)[0]
+kernel_data = boot[page_size : page_size + kernel_size]
+open(sys.argv[2], "wb").write(kernel_data)
+print(f"Kernel extracted directly: {kernel_size} bytes")
+PY
           else
             echo "::warning::No boot.img or vendor_boot.img found. Commit prebuilt/kernel manually."
           fi
+          
           if [ -n "$VENDOR_BOOT" ]; then
             cp "$VENDOR_BOOT" "$PREBUILT_DIR/vendor_boot.img"
-            echo "vendor_boot.img copied to prebuilt."
+            echo "vendor_boot.img copied to prebuilt folder."
           fi
 
       # ── 11. Apply MSMS decryption patches ────────────────────────
@@ -227,7 +222,6 @@ jobs:
       - name: Build OrangeFox (vendor_boot)
         working-directory: OrangeFox_src
         run: |
-          # العزل الصارم للـ NDK الخارجي لمنع التداخل مع الأدوات المدمجة بالسورس
           unset ANDROID_NDK_HOME
           unset ANDROID_NDK_ROOT
           unset ANDROID_NDK_LATEST_HOME
