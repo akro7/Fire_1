@@ -131,7 +131,7 @@ jobs:
           cd bootable/recovery
           git remote add ofox-upstream \
             https://gitlab.com/OrangeFox/bootable/Recovery.git 2>/dev/null || true
-          git fetch ofox-upstream ${{ env.MANIFEST_BRANCH }} --depth=1
+          git fetch ofox-upstream fox_${{ env.MANIFEST_BRANCH }} --depth=1
           echo "OrangeFox Recovery upstream fetched."
 
       # ── 11. ccache ───────────────────────────────────────────────
