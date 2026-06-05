@@ -1,0 +1,37 @@
+# Copyright (C) 2026 AKRO - fire (Redmi 12) Recovery Init
+# SPDX-License-Identifier: Apache-2.0
+
+on init
+    # MTK USB controller
+    setprop sys.usb.configfs 1
+    setprop sys.usb.controller "musb-hdrc"
+    setprop sys.usb.ffs.aio_compat 0
+
+    # FBE / Metadata decrypt support
+    setprop ro.crypto.state encrypted
+    setprop ro.crypto.type file
+
+on post-fs
+    # Symlinks for A/B preloader
+    symlink /dev/block/sda /dev/block/mmcblk0boot0
+    symlink /dev/block/sdb /dev/block/mmcblk0boot1
+    symlink /dev/block/mmcblk0boot0 /dev/block/by-name/preloader_a
+    symlink /dev/block/mmcblk0boot1 /dev/block/by-name/preloader_b
+    symlink /dev/block/mmcblk0boot0 /dev/block/platform/bootdevice/by-name/preloader_a
+    symlink /dev/block/mmcblk0boot1 /dev/block/platform/bootdevice/by-name/preloader_b
+
+on fs
+    wait /dev/block/by-name/metadata
+    format /metadata
+    mount ext4 /dev/block/by-name/metadata /metadata noatime,nosuid,nodev,discard,sync
+
+on post-fs-data
+    mkdir /data/vendor_de 0770 system system
+    mkdir /data/system_ce 0770 system system
+
+on property:hwservicemanager.ready=true
+    start vendor.keymaster-4-0
+    start gatekeeper-1-0
+
+on property:ro.crypto.state=encrypted && property:ro.crypto.type=file
+    install_keyring

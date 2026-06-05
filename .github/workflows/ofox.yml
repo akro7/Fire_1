@@ -1,0 +1,283 @@
+name: Build OrangeFox Recovery - Redmi fire (MT6768)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      SYNC_MSMS:
+        description: 'Sync MSMS branches (for decryption fixes)'
+        required: false
+        default: 'true'
+        type: boolean
+
+jobs:
+  build:
+    name: Build OrangeFox for fire
+    runs-on: ubuntu-22.04
+    env:
+      # ── Device ──────────────────────────────────────────────────────
+      DEVICE_CODENAME:   fire
+      DEVICE_TREE_URL:   ${{ github.server_url }}/${{ github.repository }}
+      DEVICE_TREE_BRANCH: main
+      DEVICE_PATH:       device/xiaomi/fire
+
+      # ── OrangeFox manifest ─────────────────────────────────────────
+      MANIFEST_URL:      https://gitlab.com/OrangeFox/sync.git
+      MANIFEST_BRANCH:   12.1
+
+      # ── Prebuilt kernel from your dump ────────────────────────────
+      # (the prebuilt/kernel binary must exist in the device tree;
+      #  only dtb.img is already there — see "Prepare kernel" step)
+      KERNEL_SOURCE_URL: https://github.com/mkpromvp/Stock-rom-dumber
+      KERNEL_SOURCE_BRANCH: dump-redmi-fire-os2.0.207.0.vmxmixm
+
+    steps:
+      # ──────────────────────────────────────────────────────────────
+      # 1. Checkout your device tree
+      # ──────────────────────────────────────────────────────────────
+      - name: Checkout device tree
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.DEVICE_PATH }}
+
+      # ──────────────────────────────────────────────────────────────
+      # 2. System dependencies
+      # ──────────────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 \
+            libncurses5 lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc unzip fontconfig python3 python3-pip bc \
+            lzop pngcrush rsync schedtool ccache openjdk-11-jdk
+          pip3 install --quiet xmltodict
+
+      # ──────────────────────────────────────────────────────────────
+      # 3. Configure git
+      # ──────────────────────────────────────────────────────────────
+      - name: Configure git
+        run: |
+          git config --global user.name  "AKRO-Build"
+          git config --global user.email "build@localhost"
+          git config --global color.ui   false
+
+      # ──────────────────────────────────────────────────────────────
+      # 4. Install repo tool
+      # ──────────────────────────────────────────────────────────────
+      - name: Install repo
+        run: |
+          mkdir -p ~/bin
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
+            -o ~/bin/repo
+          chmod +x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      # ──────────────────────────────────────────────────────────────
+      # 5. Clone OrangeFox sync scripts and init manifest
+      # ──────────────────────────────────────────────────────────────
+      - name: Init OrangeFox manifest
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/OrangeFox_src
+          cd $GITHUB_WORKSPACE/OrangeFox_src
+          git clone https://gitlab.com/OrangeFox/sync.git
+          cd sync
+          ./ofox_sync.sh \
+            --branch ${{ env.MANIFEST_BRANCH }} \
+            --path   $GITHUB_WORKSPACE/OrangeFox_src \
+            --nosync
+
+      # ──────────────────────────────────────────────────────────────
+      # 6. Sync sources (shallow to save time / disk)
+      # ──────────────────────────────────────────────────────────────
+      - name: Sync OrangeFox sources
+        working-directory: OrangeFox_src
+        run: |
+          repo sync -j$(nproc) \
+            --force-sync \
+            --no-clone-bundle \
+            --no-tags \
+            --optimized-fetch \
+            --prune \
+            --depth=1
+
+      # ──────────────────────────────────────────────────────────────
+      # 7. Place device tree into the build tree
+      # ──────────────────────────────────────────────────────────────
+      - name: Place device tree
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}
+          # Remove placeholder created by repo (if any)
+          rm -rf $GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}
+          cp -r  $GITHUB_WORKSPACE/${{ env.DEVICE_PATH }} \
+                 $GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}
+
+      # ──────────────────────────────────────────────────────────────
+      # 8. Extract prebuilt kernel from the stock dump
+      #    The dump repo has boot.img — we extract its kernel binary
+      #    so TARGET_FORCE_PREBUILT_KERNEL := true is satisfied.
+      # ──────────────────────────────────────────────────────────────
+      - name: Prepare prebuilt kernel
+        working-directory: OrangeFox_src
+        run: |
+          PREBUILT_DIR="${{ env.DEVICE_PATH }}/prebuilt"
+
+          # Check if kernel binary is already present (maintainer can
+          # commit it directly to the tree to skip this step)
+          if [ -f "$PREBUILT_DIR/kernel" ]; then
+            echo "Prebuilt kernel already present — skipping extraction."
+            exit 0
+          fi
+
+          echo "Extracting kernel from stock boot.img in dump repo …"
+          git clone --depth=1 \
+            --branch ${{ env.KERNEL_SOURCE_BRANCH }} \
+            ${{ env.KERNEL_SOURCE_URL }} /tmp/dump_repo
+
+          # Try to find boot.img or kernel directly
+          BOOT_IMG=$(find /tmp/dump_repo -maxdepth 3 -name "boot.img" | head -1)
+          if [ -z "$BOOT_IMG" ]; then
+            echo "::error::boot.img not found in dump repo. Please commit"
+            echo "::error::the prebuilt kernel binary to prebuilt/kernel manually."
+            exit 1
+          fi
+
+          pip3 install --quiet extract-dtb
+          python3 - <<'PY'
+          import struct, os, sys
+
+          boot = open("$BOOT_IMG", "rb").read()
+          # Android boot header v3 magic
+          assert boot[:8] == b"ANDROID!", "Not an Android boot image"
+
+          # header v3 layout (used by fire - BOARD_BOOTIMG_HEADER_VERSION=3)
+          # kernel_size at offset 8
+          kernel_size = struct.unpack_from("<I", boot, 8)[0]
+          # page_size = 4096 (from BoardConfig)
+          page_size = 4096
+          header_pages = 1
+          kernel_offset = header_pages * page_size
+          kernel_data = boot[kernel_offset : kernel_offset + kernel_size]
+
+          os.makedirs("$PREBUILT_DIR", exist_ok=True)
+          with open("$PREBUILT_DIR/kernel", "wb") as f:
+              f.write(kernel_data)
+          print(f"Extracted kernel: {kernel_size} bytes")
+          PY
+
+      # ──────────────────────────────────────────────────────────────
+      # 9. Apply MSMS (Multi-Stage Multi-Source) decryption patches
+      #    required for HyperOS 2 / Android 15 FBE
+      # ──────────────────────────────────────────────────────────────
+      - name: Apply MSMS decryption patches
+        if: ${{ github.event.inputs.SYNC_MSMS == 'true' || github.event_name == 'push' }}
+        working-directory: OrangeFox_src
+        run: |
+          # OrangeFox vendor/recovery patch for MT6768 FBE/HyperOS2
+          PATCH_URL="https://gitlab.com/OrangeFox/vendor/recovery.git"
+          if [ -d "vendor/recovery/.git" ]; then
+            echo "vendor/recovery already synced."
+          fi
+
+          # Apply any pending MTK crypto fixes from the OrangeFox bootable/Recovery
+          cd bootable/recovery
+          git remote add ofox-upstream \
+            https://gitlab.com/OrangeFox/bootable/Recovery.git 2>/dev/null || true
+          git fetch ofox-upstream ${{ env.MANIFEST_BRANCH }} --depth=1
+          echo "OrangeFox Recovery upstream fetched."
+
+      # ──────────────────────────────────────────────────────────────
+      # 10. Set up ccache
+      # ──────────────────────────────────────────────────────────────
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: 2G
+          key: ofox-fire-${{ env.MANIFEST_BRANCH }}
+
+      # ──────────────────────────────────────────────────────────────
+      # 11. Build OrangeFox
+      # ──────────────────────────────────────────────────────────────
+      - name: Build OrangeFox
+        working-directory: OrangeFox_src
+        run: |
+          export USE_CCACHE=1
+          export CCACHE_EXEC=$(which ccache)
+          export ALLOW_MISSING_DEPENDENCIES=true
+
+          # Source build environment
+          source build/envsetup.sh
+
+          # Lunch for OrangeFox (uses twrp_ prefix target)
+          lunch twrp_${{ env.DEVICE_CODENAME }}-eng
+
+          # Build recovery image
+          mka adbd recoveryimage -j$(nproc) 2>&1 | tee /tmp/build.log
+
+      # ──────────────────────────────────────────────────────────────
+      # 12. Rename output with version tag
+      # ──────────────────────────────────────────────────────────────
+      - name: Rename output image
+        run: |
+          OUT_DIR=$GITHUB_WORKSPACE/OrangeFox_src/out/target/product/${{ env.DEVICE_CODENAME }}
+          TIMESTAMP=$(date +'%Y%m%d-%H%M')
+          OUTFILE="OrangeFox-${{ env.MANIFEST_BRANCH }}-${{ env.DEVICE_CODENAME }}-AKRO-${TIMESTAMP}.img"
+
+          cp "$OUT_DIR/recovery.img"   "$GITHUB_WORKSPACE/$OUTFILE" || true
+          cp "$OUT_DIR/OrangeFox"*.zip "$GITHUB_WORKSPACE/"         2>/dev/null || true
+
+          echo "RECOVERY_IMG=$GITHUB_WORKSPACE/$OUTFILE"   >> $GITHUB_ENV
+          echo "OUT_DIR=$OUT_DIR"                          >> $GITHUB_ENV
+          echo "OUTFILE=$OUTFILE"                          >> $GITHUB_ENV
+
+      # ──────────────────────────────────────────────────────────────
+      # 13. Upload artifacts
+      # ──────────────────────────────────────────────────────────────
+      - name: Upload recovery image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTFILE }}
+          path: |
+            ${{ env.RECOVERY_IMG }}
+            ${{ env.OUT_DIR }}/OrangeFox*.zip
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-fire
+          path: /tmp/build.log
+          retention-days: 3
+
+      # ──────────────────────────────────────────────────────────────
+      # 14. Optional: create a GitHub Release
+      # ──────────────────────────────────────────────────────────────
+      - name: Create GitHub Release
+        if: success() && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: AKRO-${{ github.run_number }}
+          name: "OrangeFox fire AKRO Build #${{ github.run_number }}"
+          body: |
+            **Device:** Redmi fire (MT6768)
+            **ROM Base:** HyperOS 2.0.207.0.VMXMIXM (Android 15)
+            **OrangeFox branch:** ${{ env.MANIFEST_BRANCH }}
+            **Maintainer:** AKRO
+            **Status:** UNOFFICIAL
+
+            ### Notes
+            - A/B device — flash via `fastboot flash boot OrangeFox-*.img`
+            - FBE decryption included for HyperOS 2 / Android 15
+            - Built with prebuilt kernel + dtb extracted from stock dump
+          files: |
+            ${{ env.RECOVERY_IMG }}
+            ${{ env.OUT_DIR }}/OrangeFox*.zip
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

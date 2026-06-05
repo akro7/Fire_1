@@ -1,0 +1,11 @@
+# vendor_boot.prop - fire (Redmi 12)
+# Auto-generated for TWRP/OrangeFox recovery
+ro.hardware=mt6768
+ro.hardware.chipname=MT6768
+ro.board.platform=mt6768
+ro.boot.hardware=mt6768
+ro.vendor.build.security_patch=2099-12-31
+ro.build.version.security_patch=2099-12-31
+ro.crypto.state=encrypted
+ro.crypto.type=file
+ro.crypto.fs_crypto_blkdev=/dev/block/by-name/userdata

@@ -1,0 +1,48 @@
+# init.recovery.crypto.rc - fire - MT6768 FBE/FDE crypto services
+# For HyperOS 2.0 / Android 15 decryption support
+# SPDX-License-Identifier: Apache-2.0
+
+on early-init
+    # Suppress selinux denials in recovery to allow crypto
+    setenforce 0
+
+on init
+    # Set crypto state
+    setprop ro.crypto.state encrypted
+    setprop ro.crypto.type file
+    
+    # MTK TEE / Keymaster path
+    setprop vendor.tee.type trusty
+    setprop ro.hardware.keystore mt6768
+
+on post-fs
+    # Ensure metadata is mounted for FBE
+    wait /dev/block/by-name/md_udc 5
+    mount ext4 /dev/block/by-name/md_udc /metadata noatime,nosuid,nodev,discard
+
+on property:twrp.decrypt.done=true
+    setprop crypto.ready 1
+
+# Trustkernel keymaster (MT6768 uses Trustonic TrustKernel TEE)
+service vendor.keymaster-4-0-trustkernel /vendor/bin/hw/android.hardware.keymaster@4.0-service.trustkernel
+    interface android.hardware.keymaster@4.0::IKeymasterDevice default
+    user root
+    group root drmrpc
+    disabled
+    oneshot
+    seclabel u:r:recovery:s0
+
+service gatekeeper-1-0 /vendor/bin/hw/android.hardware.gatekeeper@1.0-service
+    interface android.hardware.gatekeeper@1.0::IGatekeeper default
+    user root
+    group root
+    disabled
+    oneshot
+    seclabel u:r:recovery:s0
+
+on property:hwservicemanager.ready=true
+    start vendor.keymaster-4-0-trustkernel
+    start gatekeeper-1-0
+
+on property:ro.crypto.state=encrypted && property:ro.crypto.type=file
+    install_keyring
