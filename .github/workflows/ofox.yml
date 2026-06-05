@@ -148,6 +148,8 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_EXEC=$(which ccache)
           export ALLOW_MISSING_DEPENDENCIES=true
+          export BUILD_BROKEN_USES_BUILD_COPY_HEADERS=true
+          export BUILD_BROKEN_VENDOR_PROPERTY_NAMESPACE=true
           set +e
           source build/envsetup.sh
           set -e
@@ -177,13 +179,24 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload build log (on failure)
+      - name: Collect all logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/fail_logs
+          [ -f /tmp/build.log ] && cp /tmp/build.log /tmp/fail_logs/ || true
+          find $GITHUB_WORKSPACE/OrangeFox_src/out -name "*.log" 2>/dev/null \
+            | head -20 \
+            | xargs -I{} sh -c 'cp "{}" /tmp/fail_logs/$(basename "{}")' || true
+          echo "=== ENV DUMP ===" > /tmp/fail_logs/env.log
+          env >> /tmp/fail_logs/env.log
+
+      - name: Upload all logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-fire
-          path: /tmp/build.log
-          retention-days: 3
+          name: build-log-fire-${{ github.run_number }}
+          path: /tmp/fail_logs/
+          retention-days: 7
 
       # ── 15. GitHub Release ───────────────────────────────────────
       - name: Create GitHub Release
