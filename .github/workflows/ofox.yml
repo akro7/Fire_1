@@ -3,15 +3,9 @@ name: Build OrangeFox Recovery - Redmi fire (MT6768)
 on:
   push:
     branches:
-      - 'main'
-      - 'android-12.1'
+      - main
+      - android-12.1
   workflow_dispatch:
-    inputs:
-      SYNC_MSMS:
-        description: 'Sync MSMS decryption patches'
-        required: false
-        default: 'true'
-        type: boolean
 
 jobs:
   build:
@@ -256,7 +250,6 @@ PY
 
       # ── 10. Apply MSMS decryption patches ────────────────────────
       - name: Apply MSMS decryption patches
-        if: ${{ github.event.inputs.SYNC_MSMS != 'false' }}
         working-directory: OrangeFox_src
         run: |
           cd bootable/recovery
@@ -285,7 +278,6 @@ PY
           source build/envsetup.sh
           set -e
           lunch twrp_${{ env.DEVICE_CODENAME }}-eng
-          # نبني vendor_boot بدل recoveryimage
           mka adbd vendorbootimage -j$(nproc) 2>&1 | tee /tmp/build.log
 
       # ── 13. Rename output ────────────────────────────────────────
@@ -298,7 +290,6 @@ PY
           echo "=== Files in OUT_DIR ==="
           ls -lah "$OUT_DIR/" 2>/dev/null || echo "OUT_DIR not found: $OUT_DIR"
 
-          # vendor_boot.img هو الملف المطلوب
           if [ -f "$OUT_DIR/vendor_boot.img" ]; then
             cp "$OUT_DIR/vendor_boot.img" "$GITHUB_WORKSPACE/$OUTFILE"
             echo "RECOVERY_IMG=$GITHUB_WORKSPACE/$OUTFILE" >> $GITHUB_ENV
