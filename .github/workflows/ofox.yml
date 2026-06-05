@@ -104,30 +104,20 @@ jobs:
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
           BOARD_CFG="$DEST/BoardConfig.mk"
-
           if [ ! -f "$BOARD_CFG" ]; then
             echo "::error::BoardConfig.mk not found at $BOARD_CFG"
             exit 1
           fi
-
           echo "=== Patching BoardConfig.mk for vendor_boot ==="
-
-          # حذف أي سطور قديمة متعارضة
           sed -i '/BOARD_USES_RECOVERY_AS_BOOT/d'              "$BOARD_CFG"
           sed -i '/BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT/d' "$BOARD_CFG"
           sed -i '/BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT/d' "$BOARD_CFG"
           sed -i '/TARGET_NO_RECOVERY/d'                        "$BOARD_CFG"
-
-          # إضافة الإعدادات الصحيحة لـ vendor_boot
-          cat >> "$BOARD_CFG" << 'EOF'
-
-# ── vendor_boot recovery (no dedicated recovery partition) ──
-BOARD_USES_RECOVERY_AS_BOOT             := false
-TARGET_NO_RECOVERY                      := true
-BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true
-BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true
-EOF
-
+          echo "" >> "$BOARD_CFG"
+          echo "BOARD_USES_RECOVERY_AS_BOOT             := false" >> "$BOARD_CFG"
+          echo "TARGET_NO_RECOVERY                      := true" >> "$BOARD_CFG"
+          echo "BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT := true" >> "$BOARD_CFG"
+          echo "BOARD_INCLUDE_RECOVERY_RAMDISK_IN_VENDOR_BOOT := true" >> "$BOARD_CFG"
           echo "=== BoardConfig.mk patched ==="
           grep -E "RECOVERY|VENDOR_BOOT" "$BOARD_CFG"
 
@@ -135,114 +125,76 @@ EOF
       - name: Patch device.mk for virtual AB and vendor_boot
         run: |
           DEST="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}"
-
-          # ابحث عن device.mk أو omni_fire.mk
-          DEV_MK=$(find "$DEST" -maxdepth 2 \
-            \( -name "device.mk" -o -name "omni_${{ env.DEVICE_CODENAME }}.mk" \) \
-            | head -1)
-
+          DEV_MK=$(find "$DEST" -maxdepth 2 \( -name "device.mk" -o -name "omni_${{ env.DEVICE_CODENAME }}.mk" \) | head -1)
           if [ -z "$DEV_MK" ]; then
             echo "::warning::device.mk not found, creating minimal one..."
             DEV_MK="$DEST/device.mk"
             touch "$DEV_MK"
           fi
-
           echo "=== Patching $DEV_MK ==="
-
-          # تجنب التكرار
           if ! grep -q "virtual_ab_ota" "$DEV_MK"; then
-            cat >> "$DEV_MK" << 'EOF'
-
-# ── Virtual A/B OTA ──────────────────────────────────────────
-$(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota.mk)
-EOF
+            echo "" >> "$DEV_MK"
+            echo "\$(call inherit-product, \$(SRC_TARGET_DIR)/product/virtual_ab_ota.mk)" >> "$DEV_MK"
           fi
-
           echo "=== device.mk patched ==="
 
       # ── 9. Prepare prebuilt kernel ───────────────────────────────
       - name: Prepare prebuilt kernel
         run: |
           PREBUILT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/${{ env.DEVICE_PATH }}/prebuilt"
-
           if [ -f "$PREBUILT_DIR/kernel" ]; then
             echo "Kernel already present — skipping."
             exit 0
           fi
-
           echo "Cloning stock dump to extract kernel from vendor_boot.img..."
-          git clone --depth=1 \
-            --branch ${{ env.KERNEL_SOURCE_BRANCH }} \
-            ${{ env.KERNEL_SOURCE_URL }} /tmp/dump_repo
-
-          # ابحث عن vendor_boot.img أولاً، ثم boot.img
+          git clone --depth=1 --branch ${{ env.KERNEL_SOURCE_BRANCH }} ${{ env.KERNEL_SOURCE_URL }} /tmp/dump_repo
           VENDOR_BOOT=$(find /tmp/dump_repo -maxdepth 4 -name "vendor_boot.img" | head -1)
           BOOT_IMG=$(find /tmp/dump_repo -maxdepth 4 -name "boot.img" | head -1)
-
           mkdir -p "$PREBUILT_DIR"
-
           if [ -n "$VENDOR_BOOT" ]; then
             echo "Found vendor_boot.img — extracting kernel..."
             python3 - "$VENDOR_BOOT" "$PREBUILT_DIR/kernel" << 'PY'
-import struct, sys, os
-
-src, dst = sys.argv[1], sys.argv[2]
-data = open(src, "rb").read()
-
-# vendor_boot v3/v4 header
-VENDOR_BOOT_MAGIC = b"VNDRBOOT"
-assert data[:8] == VENDOR_BOOT_MAGIC, f"Not a vendor_boot image! Magic: {data[:8]}"
-
-header_version = struct.unpack_from("<I", data, 8)[0]
-page_size       = struct.unpack_from("<I", data, 12)[0]
-kernel_offset   = struct.unpack_from("<I", data, 16)[0]  # not used for extraction
-vendor_ramdisk_size = struct.unpack_from("<I", data, 20)[0]
-
-# الـ kernel مش في vendor_boot، هو في boot.img
-# vendor_boot يحتوي على vendor_ramdisk فقط
-# نرجع kernel من boot.img لو موجود
-print(f"vendor_boot v{header_version} — kernel is in boot.img, not vendor_boot.")
-print("Will try boot.img for kernel extraction.")
-open(dst + ".vendor_boot_only", "wb").write(b"")  # marker
-PY
-
-            # لو vendor_boot مش فيه kernel، نجيبه من boot.img
+          import struct, sys, os
+          src, dst = sys.argv[1], sys.argv[2]
+          data = open(src, "rb").read()
+          VENDOR_BOOT_MAGIC = b"VNDRBOOT"
+          assert data[:8] == VENDOR_BOOT_MAGIC, f"Not a vendor_boot image! Magic: {data[:8]}"
+          header_version = struct.unpack_from("<I", data, 8)[0]
+          print(f"vendor_boot v{header_version} — kernel is in boot.img, not vendor_boot.")
+          open(dst + ".vendor_boot_only", "wb").write(b"")
+          PY
             if [ -n "$BOOT_IMG" ] && [ ! -f "$PREBUILT_DIR/kernel" ]; then
               echo "Extracting kernel from boot.img..."
               python3 - "$BOOT_IMG" "$PREBUILT_DIR/kernel" << 'PY'
-import struct, sys, os
-src, dst = sys.argv[1], sys.argv[2]
-boot = open(src, "rb").read()
-assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-kernel_size = struct.unpack_from("<I", boot, 8)[0]
-page_size   = struct.unpack_from("<I", boot, 12)[0]
-kernel_data = boot[page_size : page_size + kernel_size]
-os.makedirs(os.path.dirname(dst), exist_ok=True)
-open(dst, "wb").write(kernel_data)
-print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
-PY
+            import struct, sys, os
+            src, dst = sys.argv[1], sys.argv[2]
+            boot = open(src, "rb").read()
+            assert boot[:8] == b"ANDROID!", "Not an Android boot image"
+            kernel_size = struct.unpack_from("<I", boot, 8)[0]
+            page_size   = struct.unpack_from("<I", boot, 12)[0]
+            kernel_data = boot[page_size : page_size + kernel_size]
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            open(dst, "wb").write(kernel_data)
+            print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
+            PY
             fi
-
           elif [ -n "$BOOT_IMG" ]; then
             echo "No vendor_boot.img found, extracting kernel from boot.img..."
             python3 - "$BOOT_IMG" "$PREBUILT_DIR/kernel" << 'PY'
-import struct, sys, os
-src, dst = sys.argv[1], sys.argv[2]
-boot = open(src, "rb").read()
-assert boot[:8] == b"ANDROID!", "Not an Android boot image"
-kernel_size = struct.unpack_from("<I", boot, 8)[0]
-page_size   = struct.unpack_from("<I", boot, 12)[0]
-kernel_data = boot[page_size : page_size + kernel_size]
-os.makedirs(os.path.dirname(dst), exist_ok=True)
-open(dst, "wb").write(kernel_data)
-print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
-PY
-
+          import struct, sys, os
+          src, dst = sys.argv[1], sys.argv[2]
+          boot = open(src, "rb").read()
+          assert boot[:8] == b"ANDROID!", "Not an Android boot image"
+          kernel_size = struct.unpack_from("<I", boot, 8)[0]
+          page_size   = struct.unpack_from("<I", boot, 12)[0]
+          kernel_data = boot[page_size : page_size + kernel_size]
+          os.makedirs(os.path.dirname(dst), exist_ok=True)
+          open(dst, "wb").write(kernel_data)
+          print(f"Kernel extracted: {kernel_size} bytes -> {dst}")
+          PY
           else
             echo "::warning::No boot.img or vendor_boot.img found. Commit prebuilt/kernel manually."
           fi
-
-          # نسخ vendor_boot.img كـ prebuilt لو موجود
           if [ -n "$VENDOR_BOOT" ]; then
             cp "$VENDOR_BOOT" "$PREBUILT_DIR/vendor_boot.img"
             echo "vendor_boot.img copied to prebuilt."
@@ -253,8 +205,7 @@ PY
         working-directory: OrangeFox_src
         run: |
           cd bootable/recovery
-          git remote add ofox-upstream \
-            https://gitlab.com/OrangeFox/bootable/Recovery.git 2>/dev/null || true
+          git remote add ofox-upstream https://gitlab.com/OrangeFox/bootable/Recovery.git 2>/dev/null || true
           git fetch ofox-upstream fox_${{ env.MANIFEST_BRANCH }} --depth=1
           echo "OrangeFox Recovery upstream fetched."
 
@@ -286,10 +237,8 @@ PY
           OUT_DIR="$GITHUB_WORKSPACE/OrangeFox_src/out/target/product/${{ env.DEVICE_CODENAME }}"
           TIMESTAMP=$(date +'%Y%m%d-%H%M')
           OUTFILE="OrangeFox-${{ env.MANIFEST_BRANCH }}-${{ env.DEVICE_CODENAME }}-AKRO-${TIMESTAMP}-vendor_boot.img"
-
           echo "=== Files in OUT_DIR ==="
           ls -lah "$OUT_DIR/" 2>/dev/null || echo "OUT_DIR not found: $OUT_DIR"
-
           if [ -f "$OUT_DIR/vendor_boot.img" ]; then
             cp "$OUT_DIR/vendor_boot.img" "$GITHUB_WORKSPACE/$OUTFILE"
             echo "RECOVERY_IMG=$GITHUB_WORKSPACE/$OUTFILE" >> $GITHUB_ENV
@@ -298,7 +247,6 @@ PY
             echo "::error::vendor_boot.img not found! Build failed."
             exit 1
           fi
-
           cp "$OUT_DIR/OrangeFox"*.zip "$GITHUB_WORKSPACE/" 2>/dev/null || true
           echo "OUT_DIR=$OUT_DIR"   >> $GITHUB_ENV
           echo "OUTFILE=$OUTFILE"   >> $GITHUB_ENV
@@ -318,25 +266,17 @@ PY
       - name: Generate Failure Report
         if: failure()
         run: |
-          python3 << 'EOF'
+          python3 - << 'EOF'
           import os, re
           from datetime import datetime
-
           def read(p):
               try:
                   with open(p, 'r', errors='ignore') as f: return f.read()
               except: return ""
-
           build_log = read("/tmp/build.log")
           now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
           lines = build_log.split('\n')
-
-          error_keywords = [
-              'error:', 'fatal error:', 'FAILED', 'Exception',
-              'Could not', 'not found', 'undefined reference',
-              'Caused by:', 'BUILD FAILED', 'is obsolete', 'ckati failed'
-          ]
-
+          error_keywords = ['error:', 'fatal error:', 'FAILED', 'Exception', 'Could not', 'not found', 'undefined reference', 'Caused by:', 'BUILD FAILED', 'is obsolete', 'ckati failed']
           errors = []
           for i, line in enumerate(lines):
               if any(k in line for k in error_keywords):
@@ -345,16 +285,13 @@ PY
                   block = '\n'.join(lines[start:end])
                   if block not in errors:
                       errors.append(block)
-
           mk_errors    = re.findall(r'([^\s]+\.mk):(\d+):\s*(.+)', build_log)
           failed_tasks = re.findall(r'FAILED:\s*(.+)', build_log)
-
           report = []
           report.append("=" * 70)
           report.append("  ORANGEFOX BUILD FAILURE REPORT — fire (MT6768) vendor_boot")
           report.append(f"  Date: {now}")
           report.append("=" * 70)
-
           report.append("\n[ FAILED TASKS ]")
           report.append("-" * 70)
           if failed_tasks:
@@ -362,7 +299,6 @@ PY
                   report.append(f"  x {t.strip()}")
           else:
               report.append("  No specific failed tasks found")
-
           report.append("\n[ MAKEFILE ERRORS ]")
           report.append("-" * 70)
           if mk_errors:
@@ -377,7 +313,6 @@ PY
                       report.append("")
           else:
               report.append("  No makefile errors found")
-
           report.append("\n[ ERROR BLOCKS ]")
           report.append("-" * 70)
           if errors:
@@ -386,17 +321,13 @@ PY
                   report.append(err)
           else:
               report.append("  No error blocks found")
-
           report.append("\n[ FULL BUILD LOG ]")
           report.append("-" * 70)
           report.append(build_log[-50000:] if len(build_log) > 50000 else build_log)
-
           report_text = '\n'.join(report)
           with open("BUILD_FAILURE_REPORT.txt", 'w') as f:
               f.write(report_text)
-
           print(report_text[:3000])
-          print(f"\nFull report saved to BUILD_FAILURE_REPORT.txt")
           EOF
 
       - name: Collect all logs on failure
@@ -405,9 +336,7 @@ PY
           mkdir -p /tmp/fail_logs
           [ -f /tmp/build.log ]             && cp /tmp/build.log             /tmp/fail_logs/ || true
           [ -f BUILD_FAILURE_REPORT.txt ]   && cp BUILD_FAILURE_REPORT.txt   /tmp/fail_logs/ || true
-          find $GITHUB_WORKSPACE/OrangeFox_src/out -name "*.log" 2>/dev/null \
-            | head -20 \
-            | xargs -I{} sh -c 'cp "{}" /tmp/fail_logs/$(basename "{}")' || true
+          find $GITHUB_WORKSPACE/OrangeFox_src/out -name "*.log" 2>/dev/null | head -20 | xargs -I{} sh -c 'cp "{}" /tmp/fail_logs/$(basename "{}")' || true
           echo "=== ENV DUMP ===" > /tmp/fail_logs/env.log
           env >> /tmp/fail_logs/env.log
 
