@@ -3,8 +3,8 @@ name: Build OrangeFox Recovery - Redmi fire (MT6768)
 on:
   push:
     branches:
-      - main
-      - android-12.1
+      - 'main'
+      - 'android-12.1'
   workflow_dispatch:
     inputs:
       force_build:
