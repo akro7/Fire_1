@@ -187,7 +187,7 @@ jobs:
           echo "OUTFILE=$OUTFILE"                        >> $GITHUB_ENV
 
       # ── 14. Upload artifacts ─────────────────────────────────────
-      - name: Upload recovery image
+      - name: Upload vendor_boot image
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.OUTFILE }}
