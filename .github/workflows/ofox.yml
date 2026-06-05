@@ -6,6 +6,11 @@ on:
       - main
       - android-12.1
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force manual execution'
+        required: false
+        default: 'true'
 
 jobs:
   build:
