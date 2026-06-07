@@ -129,46 +129,54 @@ jobs:
             repo sync -j$(nproc) --force-sync
           fi
 
+      # ── FIX: mkdir -p before cp to avoid "No such file or directory" ──
       - name: Place device tree (force overwrite after sync)
         run: |
           DEST="$GITHUB_WORKSPACE/src/${{ env.DEVICE_PATH }}"
           rm -rf "$DEST"
-          cp -r "$GITHUB_WORKSPACE/${{ env.DEVICE_PATH }}" "$DEST"
+          mkdir -p "$DEST"
+          cp -r "$GITHUB_WORKSPACE/${{ env.DEVICE_PATH }}/." "$DEST/"
           rm -rf "$DEST/.git"
           echo "=== Device tree files ==="
           ls -la "$DEST/"
 
+      # ── FIX: explicit vendor/fox clone; print structure on failure ──
       - name: Verify vendor/fox exists (OrangeFox only)
         if: matrix.recovery == 'OrangeFox'
         run: |
-          FOX_COMMON="$GITHUB_WORKSPACE/src/${{ matrix.vendor_check }}"
+          VENDOR_PATH="$GITHUB_WORKSPACE/src/vendor/fox"
+          FOX_COMMON="$VENDOR_PATH/config/common.mk"
 
           if [ -f "$FOX_COMMON" ]; then
-            echo "vendor/fox/config/common.mk found"
+            echo "vendor/fox/config/common.mk found (sync provided it)"
             exit 0
           fi
 
-          echo "::warning::vendor/fox not found, using fallback clone"
-          rm -rf "$GITHUB_WORKSPACE/src/${{ matrix.vendor_path }}"
+          echo "::warning::vendor/fox not found after sync, cloning explicitly..."
+          rm -rf "$VENDOR_PATH"
           mkdir -p "$GITHUB_WORKSPACE/src/vendor"
 
           if git clone --depth=1 -b ${{ matrix.vendor_branch }} \
               ${{ matrix.vendor_repo }} \
-              "$GITHUB_WORKSPACE/src/${{ matrix.vendor_path }}"; then
-            echo "Fallback clone success: ${{ matrix.vendor_branch }}"
+              "$VENDOR_PATH"; then
+            echo "Clone success: ${{ matrix.vendor_branch }}"
           elif git clone --depth=1 -b ${{ env.MANIFEST_BRANCH }} \
               ${{ matrix.vendor_repo }} \
-              "$GITHUB_WORKSPACE/src/${{ matrix.vendor_path }}"; then
-            echo "Fallback clone success: ${{ env.MANIFEST_BRANCH }}"
+              "$VENDOR_PATH"; then
+            echo "Clone success: ${{ env.MANIFEST_BRANCH }}"
           else
             echo "::error::Failed to clone vendor/fox"
             exit 1
           fi
 
           if [ ! -f "$FOX_COMMON" ]; then
-            echo "::error::vendor/fox/config/common.mk still missing"
+            echo "=== vendor/fox structure (debug) ==="
+            find "$VENDOR_PATH" -maxdepth 4 | head -40
+            echo "::error::vendor/fox/config/common.mk still missing after clone"
             exit 1
           fi
+
+          echo "vendor/fox OK"
 
       - name: Apply MSMS decryption patches
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.SYNC_MSMS == true && env.SOC_FAMILY == 'msm' }}
