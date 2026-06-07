@@ -117,20 +117,25 @@ jobs:
           echo "=== Device tree files ==="
           ls -la "$DEST/"
 
+      # ── تحقق من vendor/fox مع إصلاح المسار الفعلي ──
       - name: Verify vendor/fox exists
         run: |
           VENDOR_PATH="$GITHUB_WORKSPACE/src/vendor/fox"
-          FOX_COMMON="$VENDOR_PATH/config/common.mk"
 
-          if [ -f "$FOX_COMMON" ]; then
-            echo "vendor/fox/config/common.mk found"
+          echo "=== Searching for common.mk inside vendor/fox ==="
+          FOUND_MK=$(find "$VENDOR_PATH" -name "common.mk" 2>/dev/null | head -1)
+
+          if [ -n "$FOUND_MK" ]; then
+            echo "Found common.mk at: $FOUND_MK"
+            echo "vendor/fox OK — continuing"
             exit 0
           fi
 
-          echo "::warning::vendor/fox not found, cloning..."
+          echo "::warning::vendor/fox not found or missing common.mk, cloning..."
           rm -rf "$VENDOR_PATH"
           mkdir -p "$GITHUB_WORKSPACE/src/vendor"
 
+          # جرب fox_12.1 الأول
           if git clone --depth=1 -b fox_${{ env.MANIFEST_BRANCH }} \
               https://gitlab.com/OrangeFox/vendor/recovery.git \
               "$VENDOR_PATH"; then
@@ -140,12 +145,29 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f "$FOX_COMMON" ]; then
-            find "$VENDOR_PATH" -maxdepth 4 | head -40
-            echo "::error::vendor/fox/config/common.mk still missing"
-            exit 1
+          echo "=== Searching for common.mk after clone ==="
+          FOUND_MK=$(find "$VENDOR_PATH" -name "common.mk" 2>/dev/null | head -1)
+
+          if [ -n "$FOUND_MK" ]; then
+            echo "Found common.mk at: $FOUND_MK"
+
+            # لو المسار مش vendor/fox/config/common.mk اعمل symlink
+            EXPECTED="$VENDOR_PATH/config/common.mk"
+            if [ "$FOUND_MK" != "$EXPECTED" ]; then
+              echo "Creating symlink: $EXPECTED -> $FOUND_MK"
+              mkdir -p "$VENDOR_PATH/config"
+              ln -sf "$FOUND_MK" "$EXPECTED"
+            fi
+
+            echo "vendor/fox OK"
+            exit 0
           fi
-          echo "vendor/fox OK"
+
+          # اطبع الـ structure للتشخيص
+          echo "::error::common.mk not found anywhere in vendor/fox"
+          echo "=== vendor/fox structure (depth 4) ==="
+          find "$VENDOR_PATH" -maxdepth 4 -not -path "*/\.*" 2>/dev/null | head -50
+          exit 1
 
       # ── استبدال bootable/recovery بالـ source الخاص بكل recovery ──
       - name: Clone recovery source
